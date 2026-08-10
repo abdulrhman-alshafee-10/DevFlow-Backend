@@ -46,6 +46,23 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
+    # ── Database ──────────────────────────────────────────────────────────────
+    # Use asyncpg driver: postgresql+asyncpg://user:pass@host:port/dbname
+    DATABASE_URL: str = "postgresql+asyncpg://devflow:devflow@localhost:5432/devflow"
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT: int = 30
+
+    @property
+    def sync_database_url(self) -> str:
+        """
+        Synchronous URL for Alembic migrations (uses psycopg2 style, not asyncpg).
+        Alembic's env.py uses this when running migrations from the CLI.
+        """
+        return self.DATABASE_URL.replace(
+            "postgresql+asyncpg://", "postgresql+psycopg2://"
+        )
+
     # ── CORS ──────────────────────────────────────────────────────────────────
     # Comma-separated list of allowed origins stored as a plain string so that
     # pydantic-settings can read it from .env without JSON parsing issues.

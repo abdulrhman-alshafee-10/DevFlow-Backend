@@ -51,35 +51,22 @@ from app.middleware.logging import RequestLoggingMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """
-    Application lifespan manager.
-
-    Code BEFORE yield  → runs at startup
-    Code AFTER  yield  → runs at shutdown (even on errors)
-
-    Phase 1: No external resources yet — just a startup log.
-    Phase 2: Database engine initialization goes here.
-    Phase 3: Redis connection goes here.
-    Phase 9: WebSocket connection manager goes here.
-    """
     settings: Settings = app.state.settings  # type: ignore[attr-defined]
 
     # ── Startup ───────────────────────────────────────────────────────────────
-    print(
-        f"🚀  {settings.APP_NAME} v{settings.APP_VERSION} starting "
-        f"[env={settings.ENVIRONMENT}]"
-    )
+    print(f"🚀  {settings.APP_NAME} v{settings.APP_VERSION} starting [env={settings.ENVIRONMENT}]")
 
-    # TODO (Phase 2): await init_database(settings)
-    # TODO (Phase 3): await init_redis(settings)
+    from app.database import engine
+    async with engine.begin() as conn:
+        print(f"✅  Database connected: {settings.DATABASE_URL.split('@')[-1]}")
 
-    yield  # ← Application is now running and handling requests
+    yield  # ← Application is now running
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
     print(f"🛑  {settings.APP_NAME} shutting down…")
+    await engine.dispose()
+    print("✅  Database pool closed.")
 
-    # TODO (Phase 2): await close_database()
-    # TODO (Phase 3): await close_redis()
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
