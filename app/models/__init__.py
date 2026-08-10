@@ -12,5 +12,6 @@ metadata object (Base.metadata) has seen every table definition.
 
 from app.models.base import Base, BaseModel  # noqa: F401
 from app.models.user import User             # noqa: F401
+from app.models.refresh_token import RefreshToken  # noqa: F401
 
-__all__ = ["Base", "BaseModel", "User"]
+__all__ = ["Base", "BaseModel", "User", "RefreshToken"]

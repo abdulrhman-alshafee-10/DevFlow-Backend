@@ -63,6 +63,25 @@ class Settings(BaseSettings):
             "postgresql+asyncpg://", "postgresql+psycopg2://"
         )
 
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    REDIS_URL: str = "redis://localhost:6379/0"
+
+    # ── Security & Authentication ─────────────────────────────────────────────
+    # Generate a strong key with: openssl rand -hex 32
+    JWT_SECRET_KEY: str = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # ── Email / SMTP ──────────────────────────────────────────────────────────
+    SMTP_TLS: bool = True
+    SMTP_PORT: int = 587
+    SMTP_HOST: str = "smtp.example.com"
+    SMTP_USER: str = "user@example.com"
+    SMTP_PASSWORD: str = "password"
+    EMAILS_FROM_EMAIL: str = "noreply@example.com"
+    EMAILS_FROM_NAME: str = "DevFlow"
+
     # ── CORS ──────────────────────────────────────────────────────────────────
     # Comma-separated list of allowed origins stored as a plain string so that
     # pydantic-settings can read it from .env without JSON parsing issues.

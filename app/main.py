@@ -57,6 +57,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     print(f"🚀  {settings.APP_NAME} v{settings.APP_VERSION} starting [env={settings.ENVIRONMENT}]")
 
     from app.database import engine
+    from app.utils.redis import RedisManager
+
+    await RedisManager.init_redis()
+    print("✅  Redis connected.")
+
     async with engine.begin() as conn:
         print(f"✅  Database connected: {settings.DATABASE_URL.split('@')[-1]}")
 
@@ -66,6 +71,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     print(f"🛑  {settings.APP_NAME} shutting down…")
     await engine.dispose()
     print("✅  Database pool closed.")
+    await RedisManager.close()
+    print("✅  Redis pool closed.")
 
 
 

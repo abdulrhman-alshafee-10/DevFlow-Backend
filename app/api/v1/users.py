@@ -27,12 +27,18 @@ import uuid
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user
+
 from app.database import get_db
 from app.schemas.common import PaginatedResponse
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 from app.services.user import UserService
 
-router = APIRouter(prefix="/users", tags=["users"])
+router = APIRouter(
+    prefix="/users", 
+    tags=["users"], 
+    dependencies=[Depends(get_current_user)]
+)
 
 
 # ── Dependency ────────────────────────────────────────────────────────────────
@@ -44,24 +50,7 @@ def get_user_service(db: AsyncSession = Depends(get_db)) -> UserService:
 
 
 # ── CREATE ────────────────────────────────────────────────────────────────────
-
-@router.post(
-    "",
-    response_model=UserResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a user",
-    description=(
-        "Register a new user account. "
-        "**Phase 2 only** — unprotected. Phase 3 will remove this endpoint "
-        "and replace it with POST /auth/register."
-    ),
-)
-async def create_user(
-    data: UserCreate,
-    service: UserService = Depends(get_user_service),
-) -> UserResponse:
-    user = await service.create(data)
-    return UserResponse.model_validate(user)
+# (Removed in Phase 3. Use POST /api/v1/auth/register instead)
 
 
 # ── LIST ──────────────────────────────────────────────────────────────────────
