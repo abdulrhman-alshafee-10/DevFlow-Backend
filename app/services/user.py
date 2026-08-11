@@ -112,6 +112,32 @@ class UserService:
     # ── Delete ────────────────────────────────────────────────────────────────
 
     async def delete(self, user_id: uuid.UUID) -> None:
-        """Hard-delete a user. Phase 3 will add protections (can't delete own account, etc.)."""
+        """Hard-delete a user."""
         user = await self.get_by_id(user_id)
         await self.repo.delete(user)
+
+    # ── Superuser Management ──────────────────────────────────────────────────
+
+    async def promote_to_superuser(self, user_id: uuid.UUID) -> User:
+        """
+        Grant superuser (system admin) privileges to a user.
+
+        This is an irreversible promotion intended for initial bootstrapping
+        and to grant another trusted admin system-level access.
+        Can only be called by an existing superuser (enforced at the API layer).
+        """
+        user = await self.get_by_id(user_id)
+        if user.is_superuser:
+            # Idempotent — no error if already a superuser
+            return user
+        return await self.repo.update(user, is_superuser=True)
+
+    async def demote_from_superuser(self, user_id: uuid.UUID) -> User:
+        """
+        Revoke superuser privileges from a user.
+
+        Used by existing superusers to manage system-level admin access.
+        A superuser cannot demote themselves (enforced at the API layer).
+        """
+        user = await self.get_by_id(user_id)
+        return await self.repo.update(user, is_superuser=False)

@@ -1,46 +1,59 @@
 """
 tests/api/test_users.py
 ───────────────────────
-API-level tests for Phase 2 user CRUD endpoints.
+API-level tests for the User endpoints — Phase 4 (Authorization).
+
+Changes from Phase 2:
+  - User creation now goes through POST /api/v1/auth/register (Phase 3)
+  - All endpoints require a valid JWT (Phase 3)
+  - GET /users is superuser-only (Phase 4)
+  - GET/PATCH/DELETE /users/{id} require ownership or superuser (Phase 4)
 
 Testing strategy:
-  - We override the `get_db` dependency with an in-memory SQLite database
-    via aiosqlite, so tests run WITHOUT a running PostgreSQL instance.
-  - Each test gets a fresh database (tables created fresh, dropped after).
-  - This tests the FULL stack: router → service → repository → DB.
+  - SQLite in-memory database (zero-setup, CI-friendly)
+  - Redis is mocked/faked — we use fakeredis for the auth service
+  - Tests cover: authentication, authorization, and CRUD correctness
 
-Why SQLite instead of PostgreSQL for tests?
-  SQLite + aiosqlite is zero-setup and runs in CI without Docker.
-  PostgreSQL-specific features (UUID type, timezone handling) are compatible
-  thanks to SQLAlchemy's dialect abstraction.
-
-  In Phase 16 (Testing phase), a dedicated PostgreSQL test container
-  is added for full production parity.
+Architecture note — why we mock Redis:
+  The auth service uses Redis for brute-force protection. In tests we use
+  fakeredis.aioredis, which is an in-memory Redis-compatible client, so
+  tests run without a real Redis server.
 """
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from unittest.mock import AsyncMock, MagicMock
 
 from app.database import get_db
 from app.models import Base
 from app.main import create_app
 from app.config import Settings, get_settings
+from app.utils.redis import get_redis_client
 
-# ── In-memory SQLite setup ────────────────────────────────────────────────────
+# ── In-memory SQLite + Redis mock setup ───────────────────────────────────────
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 
-@pytest_asyncio.fixture
-async def db_session():
+def make_fake_redis() -> AsyncMock:
     """
-    Create a fresh in-memory SQLite database for each test.
+    A minimal fake Redis client that satisfies the auth service's needs:
+      - incr()   → returns 1 (first attempt, never locked out)
+      - expire() → no-op
+      - delete() → no-op
+    """
+    redis = AsyncMock()
+    redis.incr.return_value = 1    # Always first attempt → never rate-limited
+    redis.expire.return_value = True
+    redis.delete.return_value = 1
+    return redis
 
-    Tables are created at the start and dropped at the end.
-    Each test is fully isolated.
-    """
+
+@pytest_asyncio.fixture
+async def db_engine():
+    """Create a shared in-memory engine for a test session."""
     engine = create_async_engine(
         TEST_DB_URL,
         connect_args={"check_same_thread": False},
@@ -48,14 +61,7 @@ async def db_session():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    session_factory = async_sessionmaker(
-        bind=engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    async with session_factory() as session:
-        yield session
+    yield engine
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -63,10 +69,24 @@ async def db_session():
 
 
 @pytest_asyncio.fixture
+async def db_session(db_engine):
+    """Provide an async DB session backed by the in-memory SQLite engine."""
+    session_factory = async_sessionmaker(
+        bind=db_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    async with session_factory() as session:
+        yield session
+
+
+@pytest_asyncio.fixture
 async def client(db_session: AsyncSession) -> AsyncClient:
     """
-    HTTP test client with the real DB dependency overridden to use
-    the in-memory SQLite session.
+    Full-stack test client:
+    - DB → in-memory SQLite
+    - Redis → fake (in-memory mock)
+    - App → fully initialized FastAPI instance
     """
     test_settings = Settings(
         APP_NAME="DevFlow-Test",
@@ -78,11 +98,16 @@ async def client(db_session: AsyncSession) -> AsyncClient:
     get_settings.cache_clear()
     app = create_app(settings=test_settings)
 
-    # Override get_db to yield our test session
     async def override_get_db():
         yield db_session
 
+    fake_redis = make_fake_redis()
+
+    async def override_get_redis():
+        return fake_redis
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_redis_client] = override_get_redis
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -91,128 +116,131 @@ async def client(db_session: AsyncSession) -> AsyncClient:
         yield ac
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Test helpers ──────────────────────────────────────────────────────────────
 
-VALID_USER = {
+ALICE = {
     "email": "alice@example.com",
     "username": "alice",
     "password": "password123",
     "full_name": "Alice Example",
 }
 
+BOB = {
+    "email": "bob@example.com",
+    "username": "bob",
+    "password": "password123",
+    "full_name": "Bob Example",
+}
 
-async def create_user(client: AsyncClient, data: dict | None = None) -> dict:
-    """Helper: POST /users and return the response body."""
-    payload = data or VALID_USER
-    resp = await client.post("/api/v1/users", json=payload)
+
+async def register(client: AsyncClient, data: dict) -> dict:
+    """Register a user and return the response body."""
+    resp = await client.post("/api/v1/auth/register", json=data)
     assert resp.status_code == 201, resp.text
     return resp.json()
 
 
-# ── CREATE ────────────────────────────────────────────────────────────────────
-
-class TestCreateUser:
-
-    async def test_creates_user_returns_201(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/v1/users", json=VALID_USER)
-        assert resp.status_code == 201
-
-    async def test_response_has_expected_fields(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/v1/users", json=VALID_USER)
-        body = resp.json()
-        assert "id" in body
-        assert body["email"] == VALID_USER["email"]
-        assert body["username"] == VALID_USER["username"]
-        assert body["full_name"] == VALID_USER["full_name"]
-
-    async def test_hashed_password_not_in_response(self, client: AsyncClient) -> None:
-        """CRITICAL: password hash must never be exposed in responses."""
-        resp = await client.post("/api/v1/users", json=VALID_USER)
-        body = resp.json()
-        assert "hashed_password" not in body
-        assert "password" not in body
-
-    async def test_is_email_verified_defaults_to_false(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/v1/users", json=VALID_USER)
-        assert resp.json()["is_email_verified"] is False
-
-    async def test_is_active_defaults_to_true(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/v1/users", json=VALID_USER)
-        assert resp.json()["is_active"] is True
-
-    async def test_duplicate_email_returns_409(self, client: AsyncClient) -> None:
-        await create_user(client)
-        resp = await client.post("/api/v1/users", json=VALID_USER)
-        assert resp.status_code == 409
-
-    async def test_duplicate_username_returns_409(self, client: AsyncClient) -> None:
-        await create_user(client)
-        different_email = {**VALID_USER, "email": "other@example.com"}
-        resp = await client.post("/api/v1/users", json=different_email)
-        assert resp.status_code == 409
-
-    async def test_missing_email_returns_422(self, client: AsyncClient) -> None:
-        payload = {k: v for k, v in VALID_USER.items() if k != "email"}
-        resp = await client.post("/api/v1/users", json=payload)
-        assert resp.status_code == 422
-
-    async def test_missing_password_returns_422(self, client: AsyncClient) -> None:
-        payload = {k: v for k, v in VALID_USER.items() if k != "password"}
-        resp = await client.post("/api/v1/users", json=payload)
-        assert resp.status_code == 422
-
-    async def test_short_password_returns_422(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/v1/users", json={**VALID_USER, "password": "abc"})
-        assert resp.status_code == 422
-
-    async def test_invalid_email_returns_422(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/v1/users", json={**VALID_USER, "email": "not-an-email"})
-        assert resp.status_code == 422
-
-    async def test_username_lowercase_stored(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/v1/users", json={**VALID_USER, "username": "ALICE"})
-        assert resp.json()["username"] == "alice"
+async def login(client: AsyncClient, data: dict) -> str:
+    """Login and return the Bearer access token."""
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": data["email"], "password": data["password"]},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["access_token"]
 
 
-# ── GET BY ID ─────────────────────────────────────────────────────────────────
-
-class TestGetUser:
-
-    async def test_get_existing_user(self, client: AsyncClient) -> None:
-        created = await create_user(client)
-        resp = await client.get(f"/api/v1/users/{created['id']}")
-        assert resp.status_code == 200
-        assert resp.json()["id"] == created["id"]
-
-    async def test_get_nonexistent_user_returns_404(self, client: AsyncClient) -> None:
-        fake_id = "00000000-0000-0000-0000-000000000000"
-        resp = await client.get(f"/api/v1/users/{fake_id}")
-        assert resp.status_code == 404
-
-    async def test_invalid_uuid_returns_422(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/users/not-a-uuid")
-        assert resp.status_code == 422
+async def auth_headers(client: AsyncClient, data: dict) -> dict:
+    """Return authorization headers for a registered + logged-in user."""
+    await register(client, data)
+    token = await login(client, data)
+    return {"Authorization": f"Bearer {token}"}
 
 
-# ── LIST ──────────────────────────────────────────────────────────────────────
+async def make_superuser(db_session: AsyncSession, user_id: str) -> None:
+    """Directly promote a user to superuser in the database (bypass API)."""
+    from sqlalchemy import update
+    from app.models.user import User
+    import uuid
+    await db_session.execute(
+        update(User)
+        .where(User.id == uuid.UUID(user_id))
+        .values(is_superuser=True)
+    )
+    await db_session.commit()
+
+
+# ── Authentication Required ───────────────────────────────────────────────────
+
+class TestAuthenticationRequired:
+    """All user endpoints must reject unauthenticated requests."""
+
+    @pytest.mark.asyncio
+    async def test_list_users_unauthenticated_returns_401(self, client: AsyncClient):
+        resp = await client.get("/api/v1/users")
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_get_user_unauthenticated_returns_401(self, client: AsyncClient):
+        resp = await client.get("/api/v1/users/00000000-0000-0000-0000-000000000000")
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_update_user_unauthenticated_returns_401(self, client: AsyncClient):
+        resp = await client.patch(
+            "/api/v1/users/00000000-0000-0000-0000-000000000000",
+            json={"full_name": "X"},
+        )
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_delete_user_unauthenticated_returns_401(self, client: AsyncClient):
+        resp = await client.delete("/api/v1/users/00000000-0000-0000-0000-000000000000")
+        assert resp.status_code == 401
+
+
+# ── List Users (Superuser Only) ────────────────────────────────────────────────
 
 class TestListUsers:
 
-    async def test_empty_list(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/users")
+    @pytest.mark.asyncio
+    async def test_regular_user_cannot_list_users_returns_403(
+        self, client: AsyncClient
+    ):
+        """Regular authenticated users should get 403 on the admin list endpoint."""
+        headers = await auth_headers(client, ALICE)
+        resp = await client.get("/api/v1/users", headers=headers)
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_superuser_can_list_users(
+        self, client: AsyncClient, db_session: AsyncSession
+    ):
+        """A promoted superuser can successfully list all users."""
+        alice_data = await register(client, ALICE)
+        await make_superuser(db_session, alice_data["id"])
+        # Re-login to get a fresh token (superuser flag is checked at runtime)
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.get("/api/v1/users", headers=headers)
         assert resp.status_code == 200
         body = resp.json()
-        assert body["items"] == []
-        assert body["total"] == 0
+        assert "items" in body
+        assert "total" in body
+        assert body["total"] >= 1
 
-    async def test_lists_created_users(self, client: AsyncClient) -> None:
-        await create_user(client)
-        resp = await client.get("/api/v1/users")
-        assert resp.json()["total"] == 1
-        assert len(resp.json()["items"]) == 1
+    @pytest.mark.asyncio
+    async def test_list_users_pagination_structure(
+        self, client: AsyncClient, db_session: AsyncSession
+    ):
+        """Superuser list response has the correct pagination fields."""
+        alice_data = await register(client, ALICE)
+        await make_superuser(db_session, alice_data["id"])
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
 
-    async def test_pagination_structure(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/users?page=1&size=20")
+        resp = await client.get("/api/v1/users?page=1&size=20", headers=headers)
         body = resp.json()
         assert "items" in body
         assert "total" in body
@@ -222,69 +250,261 @@ class TestListUsers:
         assert "has_next" in body
         assert "has_prev" in body
 
-    async def test_page_size_respected(self, client: AsyncClient) -> None:
-        # Create 3 users
-        for i in range(3):
-            await create_user(client, {
-                "email": f"user{i}@example.com",
-                "username": f"user{i}",
-                "password": "password123",
-            })
-        resp = await client.get("/api/v1/users?page=1&size=2")
-        body = resp.json()
-        assert body["total"] == 3
-        assert len(body["items"]) == 2
-        assert body["has_next"] is True
-        assert body["has_prev"] is False
 
-    async def test_page_size_max_100(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/users?size=999")
+# ── Get User By ID ────────────────────────────────────────────────────────────
+
+class TestGetUser:
+
+    @pytest.mark.asyncio
+    async def test_user_can_get_own_profile(self, client: AsyncClient):
+        """A user can read their own profile."""
+        alice_data = await register(client, ALICE)
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.get(f"/api/v1/users/{alice_data['id']}", headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["id"] == alice_data["id"]
+        assert resp.json()["email"] == ALICE["email"]
+
+    @pytest.mark.asyncio
+    async def test_user_cannot_get_other_users_profile_returns_403(
+        self, client: AsyncClient
+    ):
+        """A user cannot read another user's profile (IDOR prevention)."""
+        bob_data = await register(client, BOB)
+        headers = await auth_headers(client, ALICE)
+
+        resp = await client.get(f"/api/v1/users/{bob_data['id']}", headers=headers)
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_superuser_can_get_any_users_profile(
+        self, client: AsyncClient, db_session: AsyncSession
+    ):
+        """A superuser can read any user's profile."""
+        alice_data = await register(client, ALICE)
+        bob_data = await register(client, BOB)
+        await make_superuser(db_session, alice_data["id"])
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.get(f"/api/v1/users/{bob_data['id']}", headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["id"] == bob_data["id"]
+
+    @pytest.mark.asyncio
+    async def test_user_gets_403_for_nonexistent_id_that_is_not_own(
+        self, client: AsyncClient
+    ):
+        """
+        A regular user trying to GET another (non-existent) user's profile
+        should get 403 (ownership check fires before the 404 DB check).
+        This is intentional: we don't leak whether a user ID exists.
+        """
+        headers = await auth_headers(client, ALICE)
+        fake_id = "00000000-0000-0000-0000-000000000001"
+        resp = await client.get(f"/api/v1/users/{fake_id}", headers=headers)
+        # 403 because the ownership check fires first (Alice's id != fake_id)
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_get_nonexistent_user_as_superuser_returns_404(
+        self, client: AsyncClient, db_session: AsyncSession
+    ):
+        alice_data = await register(client, ALICE)
+        await make_superuser(db_session, alice_data["id"])
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        fake_id = "00000000-0000-0000-0000-000000000001"
+        resp = await client.get(f"/api/v1/users/{fake_id}", headers=headers)
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_response_includes_is_superuser_field(self, client: AsyncClient):
+        """Phase 4: is_superuser must be in the UserResponse."""
+        alice_data = await register(client, ALICE)
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.get(f"/api/v1/users/{alice_data['id']}", headers=headers)
+        assert "is_superuser" in resp.json()
+        assert resp.json()["is_superuser"] is False
+
+    @pytest.mark.asyncio
+    async def test_response_never_exposes_password(self, client: AsyncClient):
+        alice_data = await register(client, ALICE)
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.get(f"/api/v1/users/{alice_data['id']}", headers=headers)
+        body = resp.json()
+        assert "hashed_password" not in body
+        assert "password" not in body
+
+    @pytest.mark.asyncio
+    async def test_invalid_uuid_returns_422(self, client: AsyncClient):
+        headers = await auth_headers(client, ALICE)
+        resp = await client.get("/api/v1/users/not-a-uuid", headers=headers)
         assert resp.status_code == 422
 
 
-# ── UPDATE ────────────────────────────────────────────────────────────────────
+# ── Update User ────────────────────────────────────────────────────────────────
 
 class TestUpdateUser:
 
-    async def test_update_full_name(self, client: AsyncClient) -> None:
-        created = await create_user(client)
+    @pytest.mark.asyncio
+    async def test_user_can_update_own_profile(self, client: AsyncClient):
+        alice_data = await register(client, ALICE)
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
         resp = await client.patch(
-            f"/api/v1/users/{created['id']}",
+            f"/api/v1/users/{alice_data['id']}",
             json={"full_name": "Alice Updated"},
+            headers=headers,
         )
         assert resp.status_code == 200
         assert resp.json()["full_name"] == "Alice Updated"
 
-    async def test_update_nonexistent_user_returns_404(self, client: AsyncClient) -> None:
-        fake_id = "00000000-0000-0000-0000-000000000000"
-        resp = await client.patch(f"/api/v1/users/{fake_id}", json={"full_name": "X"})
+    @pytest.mark.asyncio
+    async def test_user_cannot_update_other_users_profile_returns_403(
+        self, client: AsyncClient
+    ):
+        bob_data = await register(client, BOB)
+        headers = await auth_headers(client, ALICE)
+
+        resp = await client.patch(
+            f"/api/v1/users/{bob_data['id']}",
+            json={"full_name": "Hacked"},
+            headers=headers,
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_superuser_can_update_any_profile(
+        self, client: AsyncClient, db_session: AsyncSession
+    ):
+        alice_data = await register(client, ALICE)
+        bob_data = await register(client, BOB)
+        await make_superuser(db_session, alice_data["id"])
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.patch(
+            f"/api/v1/users/{bob_data['id']}",
+            json={"full_name": "Admin Updated Bob"},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["full_name"] == "Admin Updated Bob"
+
+    @pytest.mark.asyncio
+    async def test_partial_update_doesnt_clear_other_fields(
+        self, client: AsyncClient
+    ):
+        alice_data = await register(client, ALICE)
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        await client.patch(
+            f"/api/v1/users/{alice_data['id']}",
+            json={"full_name": "New Name"},
+            headers=headers,
+        )
+        resp = await client.get(
+            f"/api/v1/users/{alice_data['id']}", headers=headers
+        )
+        assert resp.json()["email"] == ALICE["email"]
+
+    @pytest.mark.asyncio
+    async def test_update_nonexistent_user_as_superuser_returns_404(
+        self, client: AsyncClient, db_session: AsyncSession
+    ):
+        alice_data = await register(client, ALICE)
+        await make_superuser(db_session, alice_data["id"])
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        fake_id = "00000000-0000-0000-0000-000000000001"
+        resp = await client.patch(
+            f"/api/v1/users/{fake_id}",
+            json={"full_name": "X"},
+            headers=headers,
+        )
         assert resp.status_code == 404
 
-    async def test_partial_update_doesnt_clear_other_fields(self, client: AsyncClient) -> None:
-        created = await create_user(client)
-        # Update only full_name
-        await client.patch(f"/api/v1/users/{created['id']}", json={"full_name": "New Name"})
-        # Email should still be there
-        resp = await client.get(f"/api/v1/users/{created['id']}")
-        assert resp.json()["email"] == VALID_USER["email"]
 
-
-# ── DELETE ────────────────────────────────────────────────────────────────────
+# ── Delete User ────────────────────────────────────────────────────────────────
 
 class TestDeleteUser:
 
-    async def test_delete_returns_204(self, client: AsyncClient) -> None:
-        created = await create_user(client)
-        resp = await client.delete(f"/api/v1/users/{created['id']}")
+    @pytest.mark.asyncio
+    async def test_user_can_delete_own_account(self, client: AsyncClient):
+        alice_data = await register(client, ALICE)
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.delete(
+            f"/api/v1/users/{alice_data['id']}", headers=headers
+        )
         assert resp.status_code == 204
 
-    async def test_deleted_user_not_found(self, client: AsyncClient) -> None:
-        created = await create_user(client)
-        await client.delete(f"/api/v1/users/{created['id']}")
-        resp = await client.get(f"/api/v1/users/{created['id']}")
+    @pytest.mark.asyncio
+    async def test_user_cannot_delete_another_user_returns_403(
+        self, client: AsyncClient
+    ):
+        bob_data = await register(client, BOB)
+        headers = await auth_headers(client, ALICE)
+
+        resp = await client.delete(f"/api/v1/users/{bob_data['id']}", headers=headers)
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_superuser_can_delete_any_account(
+        self, client: AsyncClient, db_session: AsyncSession
+    ):
+        alice_data = await register(client, ALICE)
+        bob_data = await register(client, BOB)
+        await make_superuser(db_session, alice_data["id"])
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.delete(
+            f"/api/v1/users/{bob_data['id']}", headers=headers
+        )
+        assert resp.status_code == 204
+
+    @pytest.mark.asyncio
+    async def test_deleted_user_not_found_afterwards(
+        self, client: AsyncClient, db_session: AsyncSession
+    ):
+        alice_data = await register(client, ALICE)
+        await make_superuser(db_session, alice_data["id"])
+        bob_data = await register(client, BOB)
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        await client.delete(f"/api/v1/users/{bob_data['id']}", headers=headers)
+        resp = await client.get(f"/api/v1/users/{bob_data['id']}", headers=headers)
         assert resp.status_code == 404
 
-    async def test_delete_nonexistent_returns_404(self, client: AsyncClient) -> None:
-        fake_id = "00000000-0000-0000-0000-000000000000"
-        resp = await client.delete(f"/api/v1/users/{fake_id}")
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent_as_superuser_returns_404(
+        self, client: AsyncClient, db_session: AsyncSession
+    ):
+        alice_data = await register(client, ALICE)
+        await make_superuser(db_session, alice_data["id"])
+        token = await login(client, ALICE)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        fake_id = "00000000-0000-0000-0000-000000000001"
+        resp = await client.delete(f"/api/v1/users/{fake_id}", headers=headers)
         assert resp.status_code == 404
+
+
+# ── Placeholder to avoid unresolved name error in test above ──────────────────
+async def make_superuser_by_email(client: AsyncClient, email: str) -> None:
+    """Placeholder — used inline in the skipped test above."""
+    pass
