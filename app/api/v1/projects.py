@@ -23,7 +23,9 @@ from app.schemas.project import (
     ProjectSummary,
     ProjectUpdate,
 )
+from app.schemas.task import TaskCreate, TaskResponse
 from app.services.project import ProjectService
+from app.api.v1.tasks import get_task_service, TaskService
 
 
 def get_project_service(
@@ -352,3 +354,71 @@ async def remove_project_member(
     """
     project, _ = ctx
     await service.remove_member(project.id, user_id, current_user)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PROJECT TASKS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@project_router.post(
+    "/{project_id}/tasks",
+    response_model=TaskResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new task",
+)
+async def create_task(
+    project_id: uuid.UUID,
+    data: TaskCreate,
+    current_user: CurrentUser,
+    service: TaskService = Depends(get_task_service),
+) -> TaskResponse:
+    """
+    Create a new task within a project.
+    Requires `task:create` permission.
+    """
+    task = await service.create_task(project_id, data, current_user)
+    return TaskResponse.model_validate(task)
+
+
+@project_router.get(
+    "/{project_id}/tasks",
+    response_model=PaginatedResponse[TaskResponse],
+    summary="List project tasks",
+)
+async def list_project_tasks(
+    project_id: uuid.UUID,
+    current_user: CurrentUser,
+    status: str | None = None,
+    priority: str | None = None,
+    assignee_id: uuid.UUID | None = None,
+    search: str | None = None,
+    sort_by: str = Query(default="created_at"),
+    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+    service: TaskService = Depends(get_task_service),
+) -> PaginatedResponse[TaskResponse]:
+    """
+    List tasks in a project with filtering, sorting, and pagination.
+    Requires `task:read` permission.
+    """
+    from app.core.roles import Permission
+    await service._check_permission(project_id, current_user, Permission.TASK_READ)
+    
+    offset = (page - 1) * size
+    tasks, total = await service.task_repo.list_tasks(
+        project_id=project_id,
+        status=status,
+        priority=priority,
+        assignee_id=assignee_id,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        offset=offset,
+        limit=size,
+    )
+    return PaginatedResponse[TaskResponse].create(
+        items=[TaskResponse.model_validate(t) for t in tasks],
+        total=total,
+        page=page,
+        size=size,
+    )
