@@ -33,8 +33,10 @@ from redis.asyncio.client import Redis
 from app.core.roles import OrgRole, ProjectRole, Permission
 from app.core.roles import org_role_has_permission, project_role_has_permission
 from app.database import get_db
-from app.exceptions import InsufficientPermissionsError
+from app.exceptions import InsufficientPermissionsError, NotFoundError
+from app.models.organization import Organization, OrganizationMember
 from app.models.user import User
+from app.repositories.organization import OrganizationMemberRepository, OrganizationRepository
 from app.repositories.user import UserRepository
 from app.repositories.refresh_token import RefreshTokenRepository
 from app.services.auth import AuthService
@@ -211,3 +213,72 @@ class RequirePermission:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Permission denied. Required: '{self.permission.value}'.",
         )
+
+
+# ── Organization Member Dependency ───────────────────────────────────────────────
+
+def get_org_repository(db: SessionDep) -> OrganizationRepository:
+    return OrganizationRepository(db)
+
+def get_org_member_repository(db: SessionDep) -> OrganizationMemberRepository:
+    return OrganizationMemberRepository(db)
+
+
+class require_org_member:
+    """
+    Dependency factory that:
+      1. Fetches the Organization by org_id path param.
+      2. Looks up the OrganizationMember row for (current_user, org).
+      3. Raises 404 if org doesn't exist, 403 if user isn't a member.
+      4. Injects (org, membership) into the endpoint.
+
+    Usage:
+        @router.get("/{org_id}/members")
+        async def list_members(
+            ctx: Annotated[tuple[Organization, OrganizationMember],
+                           Depends(require_org_member())],
+        ):
+            org, membership = ctx
+            ...
+    """
+
+    def __init__(self) -> None:
+        pass
+
+    async def __call__(
+        self,
+        org_id: UUID,
+        current_user: CurrentUser,
+        org_repo: Annotated[OrganizationRepository, Depends(get_org_repository)],
+        member_repo: Annotated[OrganizationMemberRepository, Depends(get_org_member_repository)],
+    ) -> tuple[Organization, OrganizationMember]:
+        org = await org_repo.get_by_id(org_id)
+        if org is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Organization not found.",
+            )
+
+        # Superusers bypass membership checks
+        if current_user.is_superuser:
+            # Return a synthetic membership with OWNER role for superusers
+            synthetic = OrganizationMember()
+            synthetic.organization_id = org.id
+            synthetic.user_id = current_user.id
+            synthetic.role = OrgRole.OWNER.value
+            return org, synthetic
+
+        membership = await member_repo.get_membership(org.id, current_user.id)
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not a member of this organization.",
+            )
+
+        return org, membership
+
+
+OrgMemberDep = Annotated[
+    tuple[Organization, OrganizationMember],
+    Depends(require_org_member()),
+]

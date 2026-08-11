@@ -79,6 +79,16 @@ class User(BaseModel):
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
         "RefreshToken", back_populates="user", cascade="all, delete-orphan", lazy="noload"
     )
+    # — Organizations
+    org_memberships: Mapped[list["OrganizationMember"]] = relationship(  # type: ignore[name-defined]
+        "OrganizationMember", back_populates="user", cascade="all, delete-orphan", lazy="noload"
+    )
+    sent_invitations: Mapped[list["Invitation"]] = relationship(          # type: ignore[name-defined]
+        "Invitation", foreign_keys="Invitation.invited_by", back_populates="inviter", lazy="noload"
+    )
+    created_orgs: Mapped[list["Organization"]] = relationship(            # type: ignore[name-defined]
+        "Organization", foreign_keys="Organization.created_by", back_populates="creator", lazy="noload"
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r}>"
