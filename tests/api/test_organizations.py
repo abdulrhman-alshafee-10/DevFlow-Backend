@@ -52,13 +52,38 @@ def org_test_app(org_test_settings: Settings):
     return create_app(settings=org_test_settings)
 
 
+from unittest.mock import AsyncMock
+from app.utils.redis import get_redis_client
+
+def make_fake_redis() -> AsyncMock:
+    redis = AsyncMock()
+    redis.incr.return_value = 1
+    redis.expire.return_value = True
+    redis.delete.return_value = 1
+    return redis
+
+from app.database import get_db
+
 @pytest_asyncio.fixture
-async def client(org_test_app):
+async def client(org_test_app, db_session):
+    fake_redis = make_fake_redis()
+    
+    async def override_get_redis():
+        return fake_redis
+        
+    async def override_get_db():
+        yield db_session
+        
+    org_test_app.dependency_overrides[get_redis_client] = override_get_redis
+    org_test_app.dependency_overrides[get_db] = override_get_db
+
     async with AsyncClient(
         transport=ASGITransport(app=org_test_app),
         base_url="http://testclient",
     ) as ac:
         yield ac
+        
+    org_test_app.dependency_overrides.clear()
 
 
 # ── Auth Helpers ───────────────────────────────────────────────────────────────

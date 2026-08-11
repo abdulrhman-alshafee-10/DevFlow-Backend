@@ -40,15 +40,37 @@ def test_settings() -> Settings:
 
 # ── App fixture ────────────────────────────────────────────────────────────────
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from app.database import get_db
+from app.models import Base
+
+TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
+
+@pytest_asyncio.fixture
+async def db_engine():
+    engine = create_async_engine(
+        TEST_DB_URL,
+        connect_args={"check_same_thread": False},
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield engine
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+
+@pytest_asyncio.fixture
+async def db_session(db_engine):
+    session_factory = async_sessionmaker(
+        bind=db_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    async with session_factory() as session:
+        yield session
+
 @pytest.fixture(scope="session")
 def test_app(test_settings: Settings):
-    """
-    Create a FastAPI app instance configured for testing.
-
-    Scope=session means the app is created once for all tests —
-    faster than creating it per-test.
-    """
-    # Clear the lru_cache so get_settings() returns our test settings
     get_settings.cache_clear()
     return create_app(settings=test_settings)
 

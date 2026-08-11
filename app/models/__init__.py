@@ -19,6 +19,7 @@ from app.models.organization import (          # noqa: F401
     Invitation,
     InvitationStatus,
 )
+from app.models.project import Project, ProjectMember # noqa: F401
 
 __all__ = [
     "Base",
@@ -29,4 +30,6 @@ __all__ = [
     "OrganizationMember",
     "Invitation",
     "InvitationStatus",
+    "Project",
+    "ProjectMember",
 ]

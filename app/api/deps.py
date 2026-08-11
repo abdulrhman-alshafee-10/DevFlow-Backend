@@ -282,3 +282,63 @@ OrgMemberDep = Annotated[
     tuple[Organization, OrganizationMember],
     Depends(require_org_member()),
 ]
+
+
+# ── Project Member Dependency ──────────────────────────────────────────────────
+
+from app.models.project import Project, ProjectMember
+from app.repositories.project import ProjectRepository, ProjectMemberRepository
+
+def get_project_repository(db: SessionDep) -> ProjectRepository:
+    return ProjectRepository(db)
+
+def get_project_member_repository(db: SessionDep) -> ProjectMemberRepository:
+    return ProjectMemberRepository(db)
+
+class require_project_member:
+    """
+    Dependency factory that:
+      1. Fetches the Project by project_id path param.
+      2. Looks up the ProjectMember row for (current_user, project).
+      3. Raises 404 if project doesn't exist, 403 if user isn't a member.
+      4. Injects (project, membership) into the endpoint.
+    """
+
+    def __init__(self) -> None:
+        pass
+
+    async def __call__(
+        self,
+        project_id: UUID,
+        current_user: CurrentUser,
+        project_repo: Annotated[ProjectRepository, Depends(get_project_repository)],
+        member_repo: Annotated[ProjectMemberRepository, Depends(get_project_member_repository)],
+    ) -> tuple[Project, ProjectMember]:
+        project = await project_repo.get_by_id(project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found.",
+            )
+
+        if current_user.is_superuser:
+            synthetic = ProjectMember()
+            synthetic.project_id = project.id
+            synthetic.user_id = current_user.id
+            synthetic.role = ProjectRole.MANAGER.value
+            return project, synthetic
+
+        membership = await member_repo.get_membership(project.id, current_user.id)
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not a member of this project.",
+            )
+
+        return project, membership
+
+ProjectMemberDep = Annotated[
+    tuple[Project, ProjectMember],
+    Depends(require_project_member()),
+]
+
