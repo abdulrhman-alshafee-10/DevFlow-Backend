@@ -164,8 +164,11 @@ class BusinessRuleError(DevFlowException):
 class RateLimitError(DevFlowException):
     """Client has exceeded the allowed request rate."""
 
-    def __init__(self, retry_after: int = 60) -> None:
+    def __init__(self, retry_after: int = 60, limit: int = 0, remaining: int = 0, reset: int = 0) -> None:
         self.retry_after = retry_after
+        self.limit = limit
+        self.remaining = remaining
+        self.reset = reset
         super().__init__(
             message=f"Too many requests. Please retry after {retry_after} seconds.",
             error_code="RATE_LIMIT_EXCEEDED",

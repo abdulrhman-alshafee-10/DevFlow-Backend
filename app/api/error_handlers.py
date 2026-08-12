@@ -88,10 +88,17 @@ async def business_rule_handler(request: Request, exc: BusinessRuleError) -> JSO
 
 
 async def rate_limit_handler(request: Request, exc: RateLimitError) -> JSONResponse:
+    headers = {"Retry-After": str(exc.retry_after)}
+    if exc.limit:
+        headers["X-RateLimit-Limit"] = str(exc.limit)
+    if exc.reset:
+        headers["X-RateLimit-Remaining"] = str(exc.remaining)
+        headers["X-RateLimit-Reset"] = str(exc.reset)
+        
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         content=_error_body(exc.error_code, exc.message, request),
-        headers={"Retry-After": str(exc.retry_after)},
+        headers=headers,
     )
 
 

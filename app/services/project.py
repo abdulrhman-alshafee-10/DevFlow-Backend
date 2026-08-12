@@ -16,6 +16,7 @@ from app.models.user import User
 from app.repositories.project import ProjectMemberRepository, ProjectRepository
 from app.repositories.organization import OrganizationMemberRepository
 from app.schemas.project import ProjectCreate, ProjectUpdate
+from app.core.cache import CacheManager
 
 
 class ProjectService:
@@ -113,7 +114,9 @@ class ProjectService:
         if data.description is not None:
             project.description = data.description
 
-        return await self.project_repo.update(project)
+        updated = await self.project_repo.update(project)
+        await CacheManager.delete(f"project:{project_id}")
+        return updated
 
     async def delete_project(self, project_id: uuid.UUID, current_user: User) -> None:
         await self._check_permission(project_id, current_user, Permission.PROJECT_DELETE)
@@ -123,6 +126,7 @@ class ProjectService:
             raise HTTPException(status_code=404, detail="Project not found")
 
         await self.project_repo.delete(project)
+        await CacheManager.delete(f"project:{project_id}")
 
     async def archive_project(self, project_id: uuid.UUID, current_user: User) -> Project:
         await self._check_permission(project_id, current_user, Permission.PROJECT_UPDATE)
@@ -132,7 +136,9 @@ class ProjectService:
             raise HTTPException(status_code=404, detail="Project not found")
 
         project.status = "archived"
-        return await self.project_repo.update(project)
+        updated = await self.project_repo.update(project)
+        await CacheManager.delete(f"project:{project_id}")
+        return updated
 
     async def unarchive_project(self, project_id: uuid.UUID, current_user: User) -> Project:
         await self._check_permission(project_id, current_user, Permission.PROJECT_UPDATE)
@@ -142,7 +148,9 @@ class ProjectService:
             raise HTTPException(status_code=404, detail="Project not found")
 
         project.status = "active"
-        return await self.project_repo.update(project)
+        updated = await self.project_repo.update(project)
+        await CacheManager.delete(f"project:{project_id}")
+        return updated
 
     # ── Membership ─────────────────────────────────────────────────────────────
 
@@ -151,7 +159,16 @@ class ProjectService:
     ) -> tuple[list[dict[str, Any]], int]:
         await self._check_permission(project_id, current_user, Permission.PROJECT_READ)
         offset = (page - 1) * size
-        return await self.member_repo.list_members(project_id, offset=offset, limit=size)
+        
+        async def fetch():
+            return await self.member_repo.list_members(project_id, offset=offset, limit=size)
+            
+        res = await CacheManager.get_or_set(
+            key=f"project_members_list:{project_id}:{page}:{size}",
+            fetch_func=fetch,
+            ttl=300
+        )
+        return res if res else ([], 0)
 
     async def add_member(
         self, project_id: uuid.UUID, user_id: uuid.UUID, role: ProjectRole, current_user: User
@@ -189,7 +206,10 @@ class ProjectService:
             user_id=user_id,
             role=role.value,
         )
-        return await self.member_repo.add_member(membership)
+        added = await self.member_repo.add_member(membership)
+        await CacheManager.delete(f"project_member:{project_id}:{user_id}")
+        await CacheManager.delete_pattern(f"project_members_list:{project_id}:*")
+        return added
 
     async def update_member_role(
         self, project_id: uuid.UUID, user_id: uuid.UUID, new_role: ProjectRole, current_user: User
@@ -218,7 +238,10 @@ class ProjectService:
                     detail=f"You do not have permission to modify a user with the {target_membership.role} role.",
                 )
 
-        return await self.member_repo.update_role(target_membership, new_role.value)
+        updated = await self.member_repo.update_role(target_membership, new_role.value)
+        await CacheManager.delete(f"project_member:{project_id}:{user_id}")
+        await CacheManager.delete_pattern(f"project_members_list:{project_id}:*")
+        return updated
 
     async def remove_member(
         self, project_id: uuid.UUID, user_id: uuid.UUID, current_user: User
@@ -243,3 +266,5 @@ class ProjectService:
                 )
 
         await self.member_repo.remove_member(target_membership)
+        await CacheManager.delete(f"project_member:{project_id}:{user_id}")
+        await CacheManager.delete_pattern(f"project_members_list:{project_id}:*")

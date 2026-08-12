@@ -55,6 +55,7 @@ from app.schemas.organization import (
     OrganizationUpdate,
 )
 from app.utils.email import send_email
+from app.core.cache import CacheManager
 
 # Invitations expire after 7 days
 INVITATION_TTL_DAYS = 7
@@ -161,13 +162,16 @@ class OrganizationService:
         if not update_kwargs:
             return org
 
-        return await self.org_repo.update(org, **update_kwargs)
+        updated_org = await self.org_repo.update(org, **update_kwargs)
+        await CacheManager.delete(f"org:{org_id}")
+        return updated_org
 
     async def delete_org(self, org_id: uuid.UUID, current_user: User) -> None:
         org, membership = await self.get_org(org_id, current_user)
         if OrgRole(membership.role) != OrgRole.OWNER:
             raise InsufficientPermissionsError(Permission.ORG_DELETE.value)
         await self.org_repo.delete(org)
+        await CacheManager.delete(f"org:{org_id}")
 
     async def list_my_orgs(
         self, current_user: User, page: int = 1, size: int = 20
@@ -234,6 +238,7 @@ class OrganizationService:
             data={"organization_id": str(org_id), "new_role": new_role.value, "actor_id": str(current_user.id)}
         )
         
+        await CacheManager.delete(f"org_member:{org_id}:{target_user_id}")
         return updated_membership
 
     async def remove_member(
@@ -257,6 +262,7 @@ class OrganizationService:
             )
 
         await self.member_repo.delete(target_membership)
+        await CacheManager.delete(f"org_member:{org_id}:{target_user_id}")
 
     # ─── Invitations ───────────────────────────────────────────────────────────
 
@@ -393,6 +399,7 @@ class OrganizationService:
                 data={"organization_id": str(org.id), "accepted_by": str(current_user.id)}
             )
 
+        await CacheManager.delete(f"org_member:{org.id}:{current_user.id}")
         return org, new_member
 
     async def reject_invitation(self, token: str, current_user: User) -> Invitation:

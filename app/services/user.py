@@ -28,7 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.exceptions import AlreadyExistsError, NotFoundError
 from app.models.user import User
 from app.repositories.user import UserRepository
-from app.schemas.user import UserCreate, UserUpdate
+from app.schemas.user import UserCreate, UserUpdate, UserResponse
+from app.core.cache import CacheManager
 
 
 def _placeholder_hash(password: str) -> str:
@@ -87,6 +88,19 @@ class UserService:
             raise NotFoundError("User not found.")
         return user
 
+    async def get_profile_cached(self, user_id: uuid.UUID) -> UserResponse:
+        """Fetch a user by ID and return a cached Pydantic model."""
+        async def fetch():
+            user = await self.get_by_id(user_id)
+            return UserResponse.model_validate(user)
+
+        return await CacheManager.get_or_set(
+            key=f"user_profile:{user_id}",
+            fetch_func=fetch,
+            ttl=300,
+            model=UserResponse
+        )
+
     async def list_users(
         self, page: int = 1, size: int = 20
     ) -> tuple[list[User], int]:
@@ -103,11 +117,14 @@ class UserService:
         Only fields that are explicitly provided (not None) are changed.
         """
         user = await self.get_by_id(user_id)
-        return await self.repo.update(
+        updated_user = await self.repo.update(
             user,
             full_name=data.full_name,
             avatar_url=data.avatar_url,
         )
+        await CacheManager.delete(f"user_profile:{user_id}")
+        await CacheManager.delete(f"user_auth:{user_id}")
+        return updated_user
 
     # ── Delete ────────────────────────────────────────────────────────────────
 
@@ -115,6 +132,8 @@ class UserService:
         """Hard-delete a user."""
         user = await self.get_by_id(user_id)
         await self.repo.delete(user)
+        await CacheManager.delete(f"user_profile:{user_id}")
+        await CacheManager.delete(f"user_auth:{user_id}")
 
     # ── Superuser Management ──────────────────────────────────────────────────
 
@@ -130,7 +149,10 @@ class UserService:
         if user.is_superuser:
             # Idempotent — no error if already a superuser
             return user
-        return await self.repo.update(user, is_superuser=True)
+        updated_user = await self.repo.update(user, is_superuser=True)
+        await CacheManager.delete(f"user_profile:{user_id}")
+        await CacheManager.delete(f"user_auth:{user_id}")
+        return updated_user
 
     async def demote_from_superuser(self, user_id: uuid.UUID) -> User:
         """
@@ -140,4 +162,7 @@ class UserService:
         A superuser cannot demote themselves (enforced at the API layer).
         """
         user = await self.get_by_id(user_id)
-        return await self.repo.update(user, is_superuser=False)
+        updated_user = await self.repo.update(user, is_superuser=False)
+        await CacheManager.delete(f"user_profile:{user_id}")
+        await CacheManager.delete(f"user_auth:{user_id}")
+        return updated_user

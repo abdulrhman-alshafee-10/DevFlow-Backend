@@ -20,6 +20,7 @@ from app.schemas.user import UserResponse
 from app.services.auth import AuthService
 from app.services.user import UserService
 from app.schemas.auth import LoginRequest
+from app.core.rate_limit import RateLimiter
 
 settings = get_settings()
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -53,13 +54,22 @@ def clear_refresh_token_cookie(response: Response) -> None:
 
 # ── Authentication endpoints ──────────────────────────────────────────────────
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RateLimiter(limit=3, window=3600, tier="registration"))]
+)
 async def register(req: RegisterRequest, auth_service: AuthServiceDep):
     """Register a new user account."""
     return await auth_service.register_user(req)
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(RateLimiter(limit=5, window=900, tier="auth"))]
+)
 async def login(
     req: Request,
     response: Response,
@@ -87,6 +97,7 @@ async def login(
     response_model=TokenResponse,
     include_in_schema=True,
     summary="Login via OAuth2 form (Swagger UI only)",
+    dependencies=[Depends(RateLimiter(limit=5, window=900, tier="auth"))]
 )
 async def login_swagger(
     req: Request,

@@ -44,6 +44,7 @@ from app.services.auth import AuthService
 from app.services.notification import NotificationService
 from app.utils.redis import get_redis_client
 from app.utils.security import decode_access_token
+from app.core.cache import CacheManager
 
 # The tokenUrl tells Swagger UI where to send the login request when clicking "Authorize"
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
@@ -107,9 +108,40 @@ async def get_current_user(
     except Exception:
         raise credentials_exception
 
-    user = await user_repo.get_by_id(user_id)
-    if user is None:
+    async def fetch_user_dict():
+        u = await user_repo.get_by_id(user_id)
+        if not u:
+            return None
+        # Convert to dict to cache
+        return {
+            "id": str(u.id),
+            "email": u.email,
+            "username": u.username,
+            "full_name": u.full_name,
+            "avatar_url": u.avatar_url,
+            "is_active": u.is_active,
+            "is_email_verified": u.is_email_verified,
+            "is_superuser": u.is_superuser,
+            "hashed_password": u.hashed_password,
+            "created_at": u.created_at.isoformat(),
+            "updated_at": u.updated_at.isoformat(),
+        }
+
+    user_dict = await CacheManager.get_or_set(
+        key=f"user_auth:{user_id}",
+        fetch_func=fetch_user_dict,
+        ttl=300
+    )
+
+    if user_dict is None:
         raise credentials_exception
+    
+    # Reconstruct detached user model
+    from datetime import datetime
+    user_dict["id"] = UUID(user_dict["id"])
+    user_dict["created_at"] = datetime.fromisoformat(user_dict["created_at"])
+    user_dict["updated_at"] = datetime.fromisoformat(user_dict["updated_at"])
+    user = User(**user_dict)
 
     if not user.is_active:
         raise HTTPException(
@@ -292,28 +324,84 @@ class require_org_member:
         org_repo: Annotated[OrganizationRepository, Depends(get_org_repository)],
         member_repo: Annotated[OrganizationMemberRepository, Depends(get_org_member_repository)],
     ) -> tuple[Organization, OrganizationMember]:
-        org = await org_repo.get_by_id(org_id)
-        if org is None:
+        # Fetch org
+        async def fetch_org_dict():
+            o = await org_repo.get_by_id(org_id)
+            if not o:
+                return None
+            return {
+                "id": str(o.id),
+                "name": o.name,
+                "slug": o.slug,
+                "description": o.description,
+                "avatar_url": o.avatar_url,
+                "is_active": o.is_active,
+                "created_by": str(o.created_by) if o.created_by else None,
+                "created_at": o.created_at.isoformat(),
+                "updated_at": o.updated_at.isoformat(),
+            }
+            
+        org_dict = await CacheManager.get_or_set(
+            key=f"org:{org_id}",
+            fetch_func=fetch_org_dict,
+            ttl=300
+        )
+
+        if org_dict is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Organization not found.",
             )
+            
+        from datetime import datetime
+        org_dict["id"] = UUID(org_dict["id"])
+        if org_dict["created_by"]:
+            org_dict["created_by"] = UUID(org_dict["created_by"])
+        org_dict["created_at"] = datetime.fromisoformat(org_dict["created_at"])
+        org_dict["updated_at"] = datetime.fromisoformat(org_dict["updated_at"])
+        org = Organization(**org_dict)
 
         # Superusers bypass membership checks
         if current_user.is_superuser:
-            # Return a synthetic membership with OWNER role for superusers
             synthetic = OrganizationMember()
             synthetic.organization_id = org.id
             synthetic.user_id = current_user.id
             synthetic.role = OrgRole.OWNER.value
             return org, synthetic
 
-        membership = await member_repo.get_membership(org.id, current_user.id)
-        if membership is None:
+        async def fetch_member_dict():
+            m = await member_repo.get_membership(org.id, current_user.id)
+            if not m:
+                return None
+            return {
+                "id": str(m.id),
+                "organization_id": str(m.organization_id),
+                "user_id": str(m.user_id),
+                "role": m.role,
+                "joined_at": m.joined_at.isoformat(),
+                "created_at": m.created_at.isoformat(),
+                "updated_at": m.updated_at.isoformat(),
+            }
+
+        membership_dict = await CacheManager.get_or_set(
+            key=f"org_member:{org.id}:{current_user.id}",
+            fetch_func=fetch_member_dict,
+            ttl=300
+        )
+
+        if membership_dict is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You are not a member of this organization.",
             )
+
+        membership_dict["id"] = UUID(membership_dict["id"])
+        membership_dict["organization_id"] = UUID(membership_dict["organization_id"])
+        membership_dict["user_id"] = UUID(membership_dict["user_id"])
+        membership_dict["joined_at"] = datetime.fromisoformat(membership_dict["joined_at"])
+        membership_dict["created_at"] = datetime.fromisoformat(membership_dict["created_at"])
+        membership_dict["updated_at"] = datetime.fromisoformat(membership_dict["updated_at"])
+        membership = OrganizationMember(**membership_dict)
 
         return org, membership
 
@@ -354,12 +442,44 @@ class require_project_member:
         project_repo: Annotated[ProjectRepository, Depends(get_project_repository)],
         member_repo: Annotated[ProjectMemberRepository, Depends(get_project_member_repository)],
     ) -> tuple[Project, ProjectMember]:
-        project = await project_repo.get_by_id(project_id)
-        if project is None:
+        
+        async def fetch_project_dict():
+            p = await project_repo.get_by_id(project_id)
+            if not p:
+                return None
+            return {
+                "id": str(p.id),
+                "organization_id": str(p.organization_id),
+                "name": p.name,
+                "slug": p.slug,
+                "description": p.description,
+                "is_active": p.is_active,
+                "is_public": p.is_public,
+                "created_by": str(p.created_by) if p.created_by else None,
+                "created_at": p.created_at.isoformat(),
+                "updated_at": p.updated_at.isoformat(),
+            }
+
+        project_dict = await CacheManager.get_or_set(
+            key=f"project:{project_id}",
+            fetch_func=fetch_project_dict,
+            ttl=300
+        )
+
+        if project_dict is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Project not found.",
             )
+
+        from datetime import datetime
+        project_dict["id"] = UUID(project_dict["id"])
+        project_dict["organization_id"] = UUID(project_dict["organization_id"])
+        if project_dict["created_by"]:
+            project_dict["created_by"] = UUID(project_dict["created_by"])
+        project_dict["created_at"] = datetime.fromisoformat(project_dict["created_at"])
+        project_dict["updated_at"] = datetime.fromisoformat(project_dict["updated_at"])
+        project = Project(**project_dict)
 
         if current_user.is_superuser:
             synthetic = ProjectMember()
@@ -368,12 +488,39 @@ class require_project_member:
             synthetic.role = ProjectRole.MANAGER.value
             return project, synthetic
 
-        membership = await member_repo.get_membership(project.id, current_user.id)
-        if membership is None:
+        async def fetch_member_dict():
+            m = await member_repo.get_membership(project.id, current_user.id)
+            if not m:
+                return None
+            return {
+                "id": str(m.id),
+                "project_id": str(m.project_id),
+                "user_id": str(m.user_id),
+                "role": m.role,
+                "joined_at": m.joined_at.isoformat(),
+                "created_at": m.created_at.isoformat(),
+                "updated_at": m.updated_at.isoformat(),
+            }
+            
+        membership_dict = await CacheManager.get_or_set(
+            key=f"project_member:{project.id}:{current_user.id}",
+            fetch_func=fetch_member_dict,
+            ttl=300
+        )
+
+        if membership_dict is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You are not a member of this project.",
             )
+            
+        membership_dict["id"] = UUID(membership_dict["id"])
+        membership_dict["project_id"] = UUID(membership_dict["project_id"])
+        membership_dict["user_id"] = UUID(membership_dict["user_id"])
+        membership_dict["joined_at"] = datetime.fromisoformat(membership_dict["joined_at"])
+        membership_dict["created_at"] = datetime.fromisoformat(membership_dict["created_at"])
+        membership_dict["updated_at"] = datetime.fromisoformat(membership_dict["updated_at"])
+        membership = ProjectMember(**membership_dict)
 
         return project, membership
 

@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 from app.models.notification import Notification
 from app.models.user import User
 from app.repositories.notification import NotificationRepository
+from app.core.cache import CacheManager
 
 
 class NotificationService:
@@ -38,6 +39,7 @@ class NotificationService:
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
         
+        await CacheManager.delete(f"unread_notifications:{user_id}")
         return notif
 
     async def list_notifications(
@@ -49,7 +51,15 @@ class NotificationService:
         )
 
     async def get_unread_count(self, current_user: User) -> int:
-        return await self.notification_repo.count_unread_for_user(current_user.id)
+        async def fetch():
+            return await self.notification_repo.count_unread_for_user(current_user.id)
+            
+        res = await CacheManager.get_or_set(
+            key=f"unread_notifications:{current_user.id}",
+            fetch_func=fetch,
+            ttl=30
+        )
+        return res if res is not None else 0
 
     async def mark_as_read(
         self, notification_id: uuid.UUID, current_user: User
@@ -65,13 +75,17 @@ class NotificationService:
             )
             
         if not notification.is_read:
-            return await self.notification_repo.update(
+            updated = await self.notification_repo.update(
                 notification, is_read=True, read_at=datetime.now(timezone.utc)
             )
+            await CacheManager.delete(f"unread_notifications:{current_user.id}")
+            return updated
         return notification
 
     async def mark_all_as_read(self, current_user: User) -> int:
-        return await self.notification_repo.mark_all_as_read(current_user.id)
+        count = await self.notification_repo.mark_all_as_read(current_user.id)
+        await CacheManager.delete(f"unread_notifications:{current_user.id}")
+        return count
 
     async def delete_notification(
         self, notification_id: uuid.UUID, current_user: User
@@ -87,3 +101,4 @@ class NotificationService:
             )
             
         await self.notification_repo.delete(notification)
+        await CacheManager.delete(f"unread_notifications:{current_user.id}")
