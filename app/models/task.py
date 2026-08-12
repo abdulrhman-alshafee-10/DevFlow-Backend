@@ -1,9 +1,10 @@
 import uuid
 from datetime import date
 
-from sqlalchemy import String, Text, Date, Integer, ForeignKey, Index, func, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import String, Text, Date, Integer, ForeignKey, Index, func, text, Computed
+from sqlalchemy.dialects.postgresql import UUID, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from typing import Any
 
 from app.models.base import BaseModel
 
@@ -35,6 +36,10 @@ class Task(BaseModel):
     position: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    search_vector: Mapped[Any] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', title || ' ' || coalesce(description, ''))"),
+    )
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="tasks", lazy="noload")
@@ -55,11 +60,7 @@ class Task(BaseModel):
 
     __table_args__ = (
         Index("ix_tasks_project_id_status", "project_id", "status"),
-        Index(
-            "ix_tasks_fts",
-            func.to_tsvector(text("'english'"), title + " " + func.coalesce(description, "")),
-            postgresql_using="gin",
-        ),
+        Index("ix_tasks_search", "search_vector", postgresql_using="gin"),
     )
 
     def __repr__(self) -> str:

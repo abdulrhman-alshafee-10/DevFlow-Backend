@@ -82,7 +82,10 @@ from sqlalchemy.engine import Engine
 @event.listens_for(Engine, "connect")
 def sqlite_engine_connect(dbapi_connection, connection_record):
     if getattr(dbapi_connection, "create_function", None):
-        dbapi_connection.create_function("to_tsvector", 2, lambda a, b: "", deterministic=True)
+        dbapi_connection.create_function("to_tsvector", 2, lambda a, b: str(b) if b else "", deterministic=True)
+        dbapi_connection.create_function("ts_headline", 4, lambda a, b, c, d: b, deterministic=True)
+        dbapi_connection.create_function("ts_rank", 2, lambda a, b: 1, deterministic=True)
+        dbapi_connection.create_function("websearch_to_tsquery", 2, lambda a, b: b, deterministic=True)
 
 @pytest_asyncio.fixture
 async def db_engine():

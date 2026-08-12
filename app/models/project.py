@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -15,9 +16,11 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    Computed,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from typing import Any
 
 from app.models.base import BaseModel
 
@@ -34,6 +37,7 @@ class Project(BaseModel):
         Index("ix_project_org_slug", "organization_id", "slug"),
         Index("ix_project_organization_id", "organization_id"),
         Index("ix_project_created_by", "created_by"),
+        Index("ix_projects_search", "search_vector", postgresql_using="gin"),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -43,6 +47,16 @@ class Project(BaseModel):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    is_public: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    search_vector: Mapped[Any] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', name || ' ' || coalesce(description, ''))"),
+    )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(20),
