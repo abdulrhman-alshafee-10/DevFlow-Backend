@@ -19,7 +19,7 @@ from app.repositories.user import UserRepository
 from app.repositories.refresh_token import RefreshTokenRepository
 from app.schemas.auth import RegisterRequest, TokenResponse, LoginRequest
 from app.utils.security import get_password_hash, verify_password, create_access_token
-from app.utils.email import send_email
+from app.tasks.email import send_email_task
 
 settings = get_settings()
 
@@ -70,11 +70,12 @@ class AuthService:
             full_name=req.full_name
         )
         
-        # In a real app, send verification email here
-        await send_email(
+        # Fire verification email via Celery task queue
+        send_email_task.delay(
             email_to=user.email,
             subject="Welcome to DevFlow - Verify Email",
-            body="Please verify your email."
+            body="Please verify your email.",
+            idempotency_key=f"verify_email:{user.id}"
         )
         
         return user

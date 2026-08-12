@@ -18,6 +18,13 @@ from httpx import ASGITransport, AsyncClient
 
 from app.config import Settings, get_settings
 from app.main import create_app
+from app.core.celery_app import celery_app
+
+# Configure celery for testing (run synchronously without broker)
+celery_app.conf.update(
+    task_always_eager=True,
+    task_eager_propagates=True,
+)
 
 
 # ── Test settings ──────────────────────────────────────────────────────────────

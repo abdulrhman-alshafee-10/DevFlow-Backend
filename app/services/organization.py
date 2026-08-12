@@ -31,8 +31,6 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import BackgroundTasks
-
 from app.core.roles import OrgRole, Permission, can_assign_org_role, org_role_has_permission
 from app.exceptions import (
     AlreadyExistsError,
@@ -54,7 +52,7 @@ from app.schemas.organization import (
     OrganizationCreate,
     OrganizationUpdate,
 )
-from app.utils.email import send_email
+from app.tasks.email import send_email_task
 from app.core.cache import CacheManager
 
 # Invitations expire after 7 days
@@ -271,7 +269,6 @@ class OrganizationService:
         org_id: uuid.UUID,
         data: InvitationCreate,
         current_user: User,
-        background_tasks: BackgroundTasks,
     ) -> Invitation:
         """
         Create an invitation and queue an email as a background task.
@@ -312,10 +309,9 @@ class OrganizationService:
             expires_at=expires_at,
         )
 
-        # Fire email as a background task so the HTTP response isn't delayed
+        # Fire email via Celery task queue
         invitation_link = f"https://app.devflow.com/invitations/{token}/accept"
-        background_tasks.add_task(
-            send_email,
+        send_email_task.delay(
             email_to=email,
             subject=f"You've been invited to join {org.name} on DevFlow",
             body=(
@@ -324,6 +320,7 @@ class OrganizationService:
                 f"<p><a href='{invitation_link}'>Accept Invitation</a></p>"
                 f"<p>This link expires in {INVITATION_TTL_DAYS} days.</p>"
             ),
+            idempotency_key=f"invitation:{org_id}:{email}:{token}"
         )
         
         # Notify user in-app if they exist

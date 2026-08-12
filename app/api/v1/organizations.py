@@ -25,7 +25,7 @@ Authorization summary:
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, OrgMemberDep, get_current_user, get_org_member_repository, get_org_repository
@@ -328,7 +328,6 @@ async def send_invitation(
     data: InvitationCreate,
     ctx: OrgMemberDep,
     current_user: CurrentUser,
-    background_tasks: BackgroundTasks,
     service: OrganizationService = Depends(get_org_service),
 ) -> InvitationResponse:
     """
@@ -339,7 +338,7 @@ async def send_invitation(
     - Returns 409 if a pending invitation already exists for that email.
     """
     org, _ = ctx
-    invitation = await service.send_invitation(org.id, data, current_user, background_tasks)
+    invitation = await service.send_invitation(org.id, data, current_user)
     return InvitationResponse(
         **{k: getattr(invitation, k) for k in invitation.__mapper__.column_attrs.keys()},  # type: ignore[union-attr]
         organization_name=org.name,
