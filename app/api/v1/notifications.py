@@ -1,6 +1,11 @@
+import asyncio
+from typing import AsyncGenerator
 import uuid
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
+
+from app.utils.redis import RedisManager
 
 from app.api.deps import get_current_user, get_notification_service
 from app.models.user import User
@@ -12,6 +17,32 @@ from app.schemas.notification import (
 from app.services.notification import NotificationService
 
 router = APIRouter()
+
+async def notification_stream_generator(user_id: str) -> AsyncGenerator[str, None]:
+    """Generate SSE events from Redis pub/sub."""
+    redis = RedisManager.get_client()
+    pubsub = redis.pubsub()
+    await pubsub.subscribe(f"user_{user_id}")
+    try:
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                # Data is typically a JSON string, SSE wants `data: ...\n\n`
+                yield f"data: {message['data']}\n\n"
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await pubsub.close()
+
+@router.get("/stream")
+async def stream_notifications(
+    current_user: User = Depends(get_current_user),
+):
+    """Stream real-time notifications via Server-Sent Events."""
+    return StreamingResponse(
+        notification_stream_generator(str(current_user.id)),
+        media_type="text/event-stream"
+    )
+
 
 
 @router.get("", response_model=PaginatedResponse[NotificationResponse])

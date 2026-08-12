@@ -25,7 +25,7 @@ Dependency chain:
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Query, WebSocketException
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio.client import Redis
@@ -119,6 +119,35 @@ async def get_current_user(
 
     return user
 
+
+async def get_current_user_ws(
+    token: str = Query(..., description="JWT token"),
+    user_repo: UserRepository = Depends(get_user_repository),
+) -> User:
+    """
+    Extracts the JWT from the query parameter 'token', decodes it,
+    and returns the authenticated User.
+    Raises WebSocketException if invalid.
+    """
+    exception = WebSocketException(
+        code=status.WS_1008_POLICY_VIOLATION,
+        reason="Could not validate credentials",
+    )
+
+    try:
+        payload = decode_access_token(token)
+        user_id_str: str | None = payload.get("sub")
+        if user_id_str is None:
+            raise exception
+        user_id = UUID(user_id_str)
+    except Exception:
+        raise exception
+
+    user = await user_repo.get_by_id(user_id)
+    if user is None or not user.is_active:
+        raise exception
+
+    return user
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 

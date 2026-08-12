@@ -99,14 +99,33 @@ class TaskService:
         )
         
         if task.assignee_id and task.assignee_id != current_user.id:
-            await self.notification_repo.create(
+            notif = await self.notification_repo.create(
                 user_id=task.assignee_id,
                 organization_id=project.organization_id,  # type: ignore
                 type="task_assigned",
                 title=f"{current_user.full_name} assigned you to '{task.title}'",
                 data={"task_id": str(task.id), "project_id": str(project.id), "actor_name": current_user.full_name}
             )
+            from app.core.realtime import manager
+            from datetime import datetime, timezone
+            await manager.publish(f"user_{task.assignee_id}", {
+                "type": "notification",
+                "payload": {"id": str(notif.id), "title": notif.title, "type": notif.type},
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
             
+        from app.core.realtime import manager
+        from datetime import datetime, timezone
+        await manager.publish(f"project_{project_id}", {
+            "type": "task_created",
+            "payload": {
+                "task_id": str(task.id),
+                "title": task.title,
+                "actor": {"id": str(current_user.id), "name": current_user.full_name}
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+        
         return task
 
     async def get_task(
@@ -168,24 +187,50 @@ class TaskService:
             if "assignee_id" in changes:
                 new_assignee_id = updated_task.assignee_id
                 if new_assignee_id and new_assignee_id != current_user.id:
-                    await self.notification_repo.create(
+                    notif = await self.notification_repo.create(
                         user_id=new_assignee_id,
                         organization_id=project.organization_id,  # type: ignore
                         type="task_assigned",
                         title=f"{current_user.full_name} assigned you to '{updated_task.title}'",
                         data={"task_id": str(updated_task.id), "project_id": str(project.id), "actor_name": current_user.full_name}
                     )
+                    from app.core.realtime import manager
+                    from datetime import datetime, timezone
+                    await manager.publish(f"user_{new_assignee_id}", {
+                        "type": "notification",
+                        "payload": {"id": str(notif.id), "title": notif.title, "type": notif.type},
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
             
             # Status change notification
             if "status" in changes and updated_task.assignee_id and updated_task.assignee_id != current_user.id:
                 # Notify assignee that status changed
-                await self.notification_repo.create(
+                notif = await self.notification_repo.create(
                     user_id=updated_task.assignee_id,
                     organization_id=project.organization_id,  # type: ignore
                     type="task_status_changed",
                     title=f"{current_user.full_name} moved '{updated_task.title}' to {updated_task.status}",
                     data={"task_id": str(updated_task.id), "project_id": str(project.id), "actor_name": current_user.full_name}
                 )
+                from app.core.realtime import manager
+                from datetime import datetime, timezone
+                await manager.publish(f"user_{updated_task.assignee_id}", {
+                    "type": "notification",
+                    "payload": {"id": str(notif.id), "title": notif.title, "type": notif.type},
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+                
+            from app.core.realtime import manager
+            from datetime import datetime, timezone
+            await manager.publish(f"project_{updated_task.project_id}", {
+                "type": "task_updated",
+                "payload": {
+                    "task_id": str(updated_task.id),
+                    "changes": changes,
+                    "actor": {"id": str(current_user.id), "name": current_user.full_name}
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
 
         return updated_task
 
@@ -209,3 +254,14 @@ class TaskService:
         )
 
         await self.task_repo.delete(task)
+        
+        from app.core.realtime import manager
+        from datetime import datetime, timezone
+        await manager.publish(f"project_{task.project_id}", {
+            "type": "task_deleted",
+            "payload": {
+                "task_id": str(task_id),
+                "actor": {"id": str(current_user.id), "name": current_user.full_name}
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })

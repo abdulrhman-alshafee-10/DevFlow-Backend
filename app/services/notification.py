@@ -22,7 +22,7 @@ class NotificationService:
         message: str | None = None,
         data: dict | None = None,
     ) -> Notification:
-        return await self.notification_repo.create(
+        notif = await self.notification_repo.create(
             user_id=user_id,
             organization_id=organization_id,
             type=type,
@@ -30,6 +30,15 @@ class NotificationService:
             message=message,
             data=data,
         )
+        
+        from app.core.realtime import manager
+        await manager.publish(f"user_{user_id}", {
+            "type": "notification",
+            "payload": {"id": str(notif.id), "title": notif.title, "type": notif.type},
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+        
+        return notif
 
     async def list_notifications(
         self, current_user: User, page: int = 1, size: int = 50, is_read: bool | None = None

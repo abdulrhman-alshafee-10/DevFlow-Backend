@@ -58,9 +58,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     from app.database import engine
     from app.utils.redis import RedisManager
+    from app.core.realtime import manager as realtime_manager
 
     await RedisManager.init_redis()
     print("✅  Redis connected.")
+    
+    await realtime_manager.startup()
+    print("✅  Realtime listener started.")
 
     async with engine.begin() as conn:
         print(f"✅  Database connected: {settings.DATABASE_URL.split('@')[-1]}")
@@ -71,6 +75,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     print(f"🛑  {settings.APP_NAME} shutting down…")
     await engine.dispose()
     print("✅  Database pool closed.")
+    await realtime_manager.shutdown()
+    print("✅  Realtime listener stopped.")
     await RedisManager.close()
     print("✅  Redis pool closed.")
 
@@ -145,9 +151,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # load balancers and monitoring tools can reach them easily.
     # The health router is also included inside v1_router for API completeness.
     from app.api.v1.health import router as health_router
+    from app.api.websockets import router as websockets_router
 
     app.include_router(health_router)               # bare: /health, /health/ready
     app.include_router(v1_router, prefix="/api/v1") # versioned: /api/v1/health
+    app.include_router(websockets_router, prefix="/ws", tags=["websockets"])
 
     # ── Root endpoint ─────────────────────────────────────────────────────────
     @app.get("/api/v1", tags=["meta"], summary="API root")
