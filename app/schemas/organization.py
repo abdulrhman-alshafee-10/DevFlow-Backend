@@ -67,7 +67,7 @@ class OrganizationUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=255)
     description: str | None = Field(default=None, max_length=5000)
     avatar_url: str | None = Field(default=None, max_length=500)
-    is_active: bool | None = None
+
 
 
 class OrganizationResponse(BaseModel):

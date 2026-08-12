@@ -1,11 +1,11 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CommentBase(BaseModel):
-    content: str
+    content: str = Field(..., max_length=10000)
 
 
 class CommentCreate(CommentBase):

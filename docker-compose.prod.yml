@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  api:
+    command: gunicorn -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:8000 --workers 4
+    environment:
+      - ENVIRONMENT=production
+    volumes: []
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    environment:
+      - ENVIRONMENT=production
+    volumes: []
+    restart: always
+
+  beat:
+    environment:
+      - ENVIRONMENT=production
+    volumes: []
+    restart: always
+
+  db:
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devflow -d devflow_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

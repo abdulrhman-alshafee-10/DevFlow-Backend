@@ -45,6 +45,7 @@ from app.exceptions import (
     RateLimitError,
 )
 from app.middleware.logging import RequestLoggingMiddleware
+from app.middleware.security import SecurityHeadersMiddleware
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -127,6 +128,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # 2. Request logging with correlation IDs
     app.add_middleware(RequestLoggingMiddleware)
+
+    # 3. Security headers
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # ── Exception Handlers ────────────────────────────────────────────────────
     # Registration order doesn't affect dispatch; the most specific exception

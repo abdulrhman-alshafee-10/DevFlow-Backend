@@ -20,10 +20,16 @@ from app.config import Settings, get_settings
 from app.main import create_app
 from app.core.celery_app import celery_app
 
-# Configure celery for testing (run synchronously without broker)
+@pytest.fixture(autouse=True)
+def mock_celery(monkeypatch):
+    from unittest.mock import MagicMock
+    # Instead of eagerly executing, we just mock the send_task / apply_async
+    monkeypatch.setattr("celery.app.task.Task.apply_async", MagicMock())
+    monkeypatch.setattr("celery.Celery.send_task", MagicMock())
+
+# Configure celery for testing without running tasks eagerly
 celery_app.conf.update(
-    task_always_eager=True,
-    task_eager_propagates=True,
+    task_eager_propagates=False,
 )
 
 
@@ -93,12 +99,19 @@ async def db_engine():
         TEST_DB_URL,
         connect_args={"check_same_thread": False},
     )
+    from app import database
+    original_engine = database.engine
+    database.engine = engine
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+    
+    database.engine = original_engine
     await engine.dispose()
+
 
 @pytest_asyncio.fixture
 async def db_session(db_engine):
@@ -107,19 +120,36 @@ async def db_session(db_engine):
         class_=AsyncSession,
         expire_on_commit=False,
     )
+    from app import database
+    original_session_local = database.AsyncSessionLocal
+    database.AsyncSessionLocal = session_factory
+
     async with session_factory() as session:
         yield session
+
+    database.AsyncSessionLocal = original_session_local
 
 @pytest.fixture(scope="session")
 def test_app(test_settings: Settings):
     get_settings.cache_clear()
     return create_app(settings=test_settings)
 
+@pytest_asyncio.fixture(autouse=True)
+async def mock_redis():
+    import fakeredis.aioredis
+    from app.utils.redis import RedisManager
+    
+    fake_redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    RedisManager._client = fake_redis
+    yield fake_redis
+    RedisManager._client = None
+
+
 
 # ── HTTP client fixture ────────────────────────────────────────────────────────
 
 @pytest_asyncio.fixture
-async def client(test_app) -> AsyncClient:
+async def client(test_app, db_session) -> AsyncClient:
     """
     Async HTTP test client.
 
@@ -128,8 +158,11 @@ async def client(test_app) -> AsyncClient:
 
     Scope=function (default) so each test gets a fresh client.
     """
+    from app.database import get_db
+    test_app.dependency_overrides[get_db] = lambda: db_session
     async with AsyncClient(
         transport=ASGITransport(app=test_app),
         base_url="http://testclient",
     ) as ac:
         yield ac
+    test_app.dependency_overrides.clear()

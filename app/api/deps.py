@@ -453,6 +453,7 @@ class require_project_member:
                 "name": p.name,
                 "slug": p.slug,
                 "description": p.description,
+                "status": p.status,
                 "is_active": p.is_active,
                 "is_public": p.is_public,
                 "created_by": str(p.created_by) if p.created_by else None,
@@ -497,7 +498,7 @@ class require_project_member:
                 "project_id": str(m.project_id),
                 "user_id": str(m.user_id),
                 "role": m.role,
-                "joined_at": m.joined_at.isoformat(),
+                "added_at": m.added_at.isoformat(),
                 "created_at": m.created_at.isoformat(),
                 "updated_at": m.updated_at.isoformat(),
             }
@@ -517,7 +518,7 @@ class require_project_member:
         membership_dict["id"] = UUID(membership_dict["id"])
         membership_dict["project_id"] = UUID(membership_dict["project_id"])
         membership_dict["user_id"] = UUID(membership_dict["user_id"])
-        membership_dict["joined_at"] = datetime.fromisoformat(membership_dict["joined_at"])
+        membership_dict["added_at"] = datetime.fromisoformat(membership_dict.pop("added_at"))
         membership_dict["created_at"] = datetime.fromisoformat(membership_dict["created_at"])
         membership_dict["updated_at"] = datetime.fromisoformat(membership_dict["updated_at"])
         membership = ProjectMember(**membership_dict)
