@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     STORAGE_SECRET_KEY: str = "minioadmin"
     STORAGE_BUCKET_NAME: str = "devflow-attachments"
 
+    # ── AI & LLM ──────────────────────────────────────────────────────────────
+    OLLAMA_BASE_URL: str = "https://api.ollama.com"
+    OLLAMA_API_KEY: str | None = None
+    OPENAI_API_KEY: str | None = None
+    ANTHROPIC_API_KEY: str | None = None
+    AI_RATE_LIMIT_PER_HOUR: int = 20
+
     # ── CORS ──────────────────────────────────────────────────────────────────
     # Comma-separated list of allowed origins stored as a plain string so that
     # pydantic-settings can read it from .env without JSON parsing issues.
