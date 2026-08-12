@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     EMAILS_FROM_EMAIL: str = "noreply@example.com"
     EMAILS_FROM_NAME: str = "DevFlow"
 
+    # ── Storage / MinIO ───────────────────────────────────────────────────────
+    STORAGE_ENDPOINT: str = "http://localhost:9000"
+    STORAGE_ACCESS_KEY: str = "minioadmin"
+    STORAGE_SECRET_KEY: str = "minioadmin"
+    STORAGE_BUCKET_NAME: str = "devflow-attachments"
+
     # ── CORS ──────────────────────────────────────────────────────────────────
     # Comma-separated list of allowed origins stored as a plain string so that
     # pydantic-settings can read it from .env without JSON parsing issues.

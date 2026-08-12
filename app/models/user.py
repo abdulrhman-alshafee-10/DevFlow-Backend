@@ -89,6 +89,9 @@ class User(BaseModel):
     created_orgs: Mapped[list["Organization"]] = relationship(            # type: ignore[name-defined]
         "Organization", foreign_keys="Organization.created_by", back_populates="creator", lazy="noload"
     )
+    attachments: Mapped[list["Attachment"]] = relationship(
+        "Attachment", back_populates="uploader", cascade="all, delete-orphan", lazy="noload"
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r}>"

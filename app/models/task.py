@@ -1,7 +1,7 @@
 import uuid
 from datetime import date
 
-from sqlalchemy import String, Text, Date, Integer, ForeignKey, Index, func
+from sqlalchemy import String, Text, Date, Integer, ForeignKey, Index, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -49,12 +49,15 @@ class Task(BaseModel):
     comments: Mapped[list["Comment"]] = relationship(
         "Comment", back_populates="task", cascade="all, delete-orphan", lazy="noload"
     )
+    attachments: Mapped[list["Attachment"]] = relationship(
+        "Attachment", back_populates="task", cascade="all, delete-orphan", lazy="noload"
+    )
 
     __table_args__ = (
         Index("ix_tasks_project_id_status", "project_id", "status"),
         Index(
             "ix_tasks_fts",
-            func.to_tsvector("english", title + " " + func.coalesce(description, "")),
+            func.to_tsvector(text("'english'"), title + " " + func.coalesce(description, "")),
             postgresql_using="gin",
         ),
     )
