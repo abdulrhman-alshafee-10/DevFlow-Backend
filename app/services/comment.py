@@ -10,6 +10,7 @@ from app.repositories.comment import CommentRepository
 from app.repositories.task import TaskRepository
 from app.repositories.project import ProjectRepository, ProjectMemberRepository
 from app.repositories.audit_log import AuditLogRepository
+from app.repositories.notification import NotificationRepository
 from app.schemas.comment import CommentCreate, CommentUpdate
 
 class CommentService:
@@ -20,12 +21,14 @@ class CommentService:
         project_repo: ProjectRepository,
         member_repo: ProjectMemberRepository,
         audit_repo: AuditLogRepository,
+        notification_repo: NotificationRepository,
     ) -> None:
         self.comment_repo = comment_repo
         self.task_repo = task_repo
         self.project_repo = project_repo
         self.member_repo = member_repo
         self.audit_repo = audit_repo
+        self.notification_repo = notification_repo
 
     async def _check_permission(
         self, project_id: uuid.UUID, current_user: User, permission: Permission
@@ -71,6 +74,23 @@ class CommentService:
             actor_id=current_user.id,
             changes={"content": data.content},
         )
+        
+        # Notify task assignee and/or task creator
+        users_to_notify = set()
+        if task.assignee_id and task.assignee_id != current_user.id:
+            users_to_notify.add(task.assignee_id)
+        if task.creator_id != current_user.id:
+            users_to_notify.add(task.creator_id)
+            
+        for user_id_to_notify in users_to_notify:
+            await self.notification_repo.create(
+                user_id=user_id_to_notify,
+                organization_id=project.organization_id,  # type: ignore
+                type="comment_added",
+                title=f"{current_user.full_name} commented on '{task.title}'",
+                data={"task_id": str(task.id), "project_id": str(project.id), "comment_id": str(comment.id), "actor_name": current_user.full_name}
+            )
+            
         return comment
 
     async def list_comments(

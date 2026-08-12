@@ -70,6 +70,12 @@ class Project(BaseModel):
         cascade="all, delete-orphan",
         lazy="noload",
     )
+    tasks: Mapped[list["Task"]] = relationship(  # type: ignore[name-defined]
+        "Task",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="noload",
+    )
 
     def __repr__(self) -> str:
         return f"<Project id={self.id} org={self.organization_id} slug={self.slug!r}>"

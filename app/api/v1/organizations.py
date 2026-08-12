@@ -36,6 +36,8 @@ from app.repositories.organization import (
     OrganizationMemberRepository,
     OrganizationRepository,
 )
+from app.repositories.user import UserRepository
+from app.repositories.notification import NotificationRepository
 from app.schemas.common import PaginatedResponse
 from app.schemas.organization import (
     InvitationAcceptResponse,
@@ -64,6 +66,8 @@ def get_org_service(
         org_repo=OrganizationRepository(db),
         member_repo=OrganizationMemberRepository(db),
         invite_repo=InvitationRepository(db),
+        user_repo=UserRepository(db),
+        notification_repo=NotificationRepository(db),
     )
 
 

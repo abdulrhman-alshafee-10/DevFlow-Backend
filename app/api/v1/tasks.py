@@ -8,6 +8,7 @@ from app.repositories.task import TaskRepository
 from app.repositories.project import ProjectRepository, ProjectMemberRepository
 from app.repositories.comment import CommentRepository
 from app.repositories.audit_log import AuditLogRepository
+from app.repositories.notification import NotificationRepository
 from app.schemas.common import PaginatedResponse
 from app.schemas.task import TaskResponse, TaskUpdate
 from app.schemas.comment import CommentCreate, CommentResponse
@@ -24,6 +25,7 @@ def get_task_service(
         project_repo=ProjectRepository(db),
         member_repo=ProjectMemberRepository(db),
         audit_repo=AuditLogRepository(db),
+        notification_repo=NotificationRepository(db),
     )
 
 def get_comment_service(
@@ -35,6 +37,7 @@ def get_comment_service(
         project_repo=ProjectRepository(db),
         member_repo=ProjectMemberRepository(db),
         audit_repo=AuditLogRepository(db),
+        notification_repo=NotificationRepository(db),
     )
 
 

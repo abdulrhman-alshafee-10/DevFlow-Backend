@@ -9,6 +9,7 @@ from app.models.user import User
 from app.repositories.task import TaskRepository
 from app.repositories.project import ProjectRepository, ProjectMemberRepository
 from app.repositories.audit_log import AuditLogRepository
+from app.repositories.notification import NotificationRepository
 from app.schemas.task import TaskCreate, TaskUpdate
 
 class TaskService:
@@ -18,11 +19,13 @@ class TaskService:
         project_repo: ProjectRepository,
         member_repo: ProjectMemberRepository,
         audit_repo: AuditLogRepository,
+        notification_repo: NotificationRepository,
     ) -> None:
         self.task_repo = task_repo
         self.project_repo = project_repo
         self.member_repo = member_repo
         self.audit_repo = audit_repo
+        self.notification_repo = notification_repo
 
     async def _check_permission(
         self, project_id: uuid.UUID, current_user: User, permission: Permission
@@ -94,6 +97,16 @@ class TaskService:
             actor_id=current_user.id,
             changes=changes,
         )
+        
+        if task.assignee_id and task.assignee_id != current_user.id:
+            await self.notification_repo.create(
+                user_id=task.assignee_id,
+                organization_id=project.organization_id,  # type: ignore
+                type="task_assigned",
+                title=f"{current_user.full_name} assigned you to '{task.title}'",
+                data={"task_id": str(task.id), "project_id": str(project.id), "actor_name": current_user.full_name}
+            )
+            
         return task
 
     async def get_task(
@@ -149,6 +162,30 @@ class TaskService:
                 actor_id=current_user.id,
                 changes=changes,
             )
+
+            # Notifications
+            # Assignment notification
+            if "assignee_id" in changes:
+                new_assignee_id = updated_task.assignee_id
+                if new_assignee_id and new_assignee_id != current_user.id:
+                    await self.notification_repo.create(
+                        user_id=new_assignee_id,
+                        organization_id=project.organization_id,  # type: ignore
+                        type="task_assigned",
+                        title=f"{current_user.full_name} assigned you to '{updated_task.title}'",
+                        data={"task_id": str(updated_task.id), "project_id": str(project.id), "actor_name": current_user.full_name}
+                    )
+            
+            # Status change notification
+            if "status" in changes and updated_task.assignee_id and updated_task.assignee_id != current_user.id:
+                # Notify assignee that status changed
+                await self.notification_repo.create(
+                    user_id=updated_task.assignee_id,
+                    organization_id=project.organization_id,  # type: ignore
+                    type="task_status_changed",
+                    title=f"{current_user.full_name} moved '{updated_task.title}' to {updated_task.status}",
+                    data={"task_id": str(updated_task.id), "project_id": str(project.id), "actor_name": current_user.full_name}
+                )
 
         return updated_task
 

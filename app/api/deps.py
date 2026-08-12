@@ -39,7 +39,9 @@ from app.models.user import User
 from app.repositories.organization import OrganizationMemberRepository, OrganizationRepository
 from app.repositories.user import UserRepository
 from app.repositories.refresh_token import RefreshTokenRepository
+from app.repositories.notification import NotificationRepository
 from app.services.auth import AuthService
+from app.services.notification import NotificationService
 from app.utils.redis import get_redis_client
 from app.utils.security import decode_access_token
 
@@ -65,6 +67,15 @@ def get_auth_service(
     redis_client: RedisDep,
 ) -> AuthService:
     return AuthService(user_repo=user_repo, token_repo=token_repo, redis_client=redis_client)
+
+
+def get_notification_repository(db: SessionDep) -> NotificationRepository:
+    return NotificationRepository(db)
+
+def get_notification_service(
+    notification_repo: Annotated[NotificationRepository, Depends(get_notification_repository)],
+) -> NotificationService:
+    return NotificationService(notification_repo=notification_repo)
 
 
 # ── Core Authentication Dependency ────────────────────────────────────────────

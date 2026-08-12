@@ -41,10 +41,41 @@ def test_settings() -> Settings:
 # ── App fixture ────────────────────────────────────────────────────────────────
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, REGCONFIG
+from sqlalchemy import JSON
 from app.database import get_db
 from app.models import Base
 
+@compiles(JSONB, "sqlite")
+def compile_jsonb_sqlite(type_, compiler, **kw):
+    return "JSON"
+
+@compiles(TSVECTOR, "sqlite")
+def compile_tsvector_sqlite(type_, compiler, **kw):
+    return "TEXT"
+
+@compiles(REGCONFIG, "sqlite")
+def compile_regconfig_sqlite(type_, compiler, **kw):
+    return "TEXT"
+
+# Hack to fix literal value rendering for REGCONFIG in SQLite
+from sqlalchemy.dialects.sqlite.base import SQLiteCompiler
+def render_literal_value(self, value, type_):
+    if isinstance(type_, REGCONFIG):
+        return f"'{value}'"
+    return super(SQLiteCompiler, self).render_literal_value(value, type_)
+SQLiteCompiler.render_literal_value = render_literal_value
+
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
+
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
+
+@event.listens_for(Engine, "connect")
+def sqlite_engine_connect(dbapi_connection, connection_record):
+    if getattr(dbapi_connection, "create_function", None):
+        dbapi_connection.create_function("to_tsvector", 2, lambda a, b: "", deterministic=True)
 
 @pytest_asyncio.fixture
 async def db_engine():

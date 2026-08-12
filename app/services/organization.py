@@ -47,6 +47,8 @@ from app.repositories.organization import (
     OrganizationMemberRepository,
     OrganizationRepository,
 )
+from app.repositories.user import UserRepository
+from app.repositories.notification import NotificationRepository
 from app.schemas.organization import (
     InvitationCreate,
     OrganizationCreate,
@@ -73,10 +75,14 @@ class OrganizationService:
         org_repo: OrganizationRepository,
         member_repo: OrganizationMemberRepository,
         invite_repo: InvitationRepository,
+        user_repo: UserRepository,
+        notification_repo: NotificationRepository,
     ) -> None:
         self.org_repo = org_repo
         self.member_repo = member_repo
         self.invite_repo = invite_repo
+        self.user_repo = user_repo
+        self.notification_repo = notification_repo
 
     # ─── Internal helpers ──────────────────────────────────────────────────────
 
@@ -217,7 +223,18 @@ class OrganizationService:
                     "Cannot demote the last OWNER. Transfer ownership first."
                 )
 
-        return await self.member_repo.update(target_membership, role=new_role.value)
+        updated_membership = await self.member_repo.update(target_membership, role=new_role.value)
+        
+        # Notify user of role change
+        await self.notification_repo.create(
+            user_id=target_user_id,
+            organization_id=org_id,
+            type="member_role_changed",
+            title=f"Your role in '{my_membership.organization.name if hasattr(my_membership, 'organization') and my_membership.organization else 'the organization'}' changed to {new_role.value}",
+            data={"organization_id": str(org_id), "new_role": new_role.value, "actor_id": str(current_user.id)}
+        )
+        
+        return updated_membership
 
     async def remove_member(
         self,
@@ -302,6 +319,17 @@ class OrganizationService:
                 f"<p>This link expires in {INVITATION_TTL_DAYS} days.</p>"
             ),
         )
+        
+        # Notify user in-app if they exist
+        invited_user = await self.user_repo.get_by_email(email)
+        if invited_user:
+            await self.notification_repo.create(
+                user_id=invited_user.id,
+                organization_id=org_id,
+                type="invitation_received",
+                title=f"You've been invited to join {org.name}",
+                data={"organization_id": str(org_id), "inviter_name": current_user.full_name}
+            )
 
         return invitation
 
@@ -354,6 +382,16 @@ class OrganizationService:
             role=invitation.role,
         )
         await self.invite_repo.update(invitation, status=InvitationStatus.ACCEPTED.value)
+        
+        # Notify inviter
+        if invitation.invited_by:
+            await self.notification_repo.create(
+                user_id=invitation.invited_by,
+                organization_id=invitation.organization_id,
+                type="invitation_accepted",
+                title=f"{current_user.full_name} accepted your invitation to join {org.name}",
+                data={"organization_id": str(org.id), "accepted_by": str(current_user.id)}
+            )
 
         return org, new_member
 
